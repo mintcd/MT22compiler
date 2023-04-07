@@ -3,6 +3,7 @@
         "./src/main/mt22/utils",
         "./src/main/mt22/parser",
         "./src/main/mt22/astgen",
-        "./src/main/mt22/checker"
+        "./src/main/mt22/checker",
+        "./src/test"
     ]
 }

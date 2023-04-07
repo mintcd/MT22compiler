@@ -1,7 +1,8 @@
 from abc import ABC, ABCMeta
 
 
-class StaticError(Exception): pass
+class StaticError(Exception):
+    pass
 
 
 class Kind(ABC):
@@ -9,10 +10,20 @@ class Kind(ABC):
         return self.__class__.__name__
 
 
-class Variable(Kind): pass
-class Parameter(Kind): pass
-class Function(Kind): pass
-class Identifier(Kind): pass
+class Variable(Kind):
+    pass
+
+
+class Parameter(Kind):
+    pass
+
+
+class Function(Kind):
+    pass
+
+
+class Identifier(Kind):
+    pass
 
 
 class Redeclared(StaticError):
@@ -56,6 +67,14 @@ class TypeMismatchInStatement(StaticError):
 
     def __str__(self):
         return f"Type mismatch in statement: {str(self.stmt)}"
+
+
+class TypeMismatchInVardecl (StaticError):
+    def __init__(self, vardecl):
+        self.vardecl = vardecl
+
+    def __str__(self):
+        return f"Type mismatch in Variable Declaration: {str(self.vardecl)}"
 
 
 class MustInLoop(StaticError):
