@@ -1,4 +1,16 @@
-Assign(Id("z"),
-       BinOp("&&",
-             BinOp(">",BinOp("-",Id("x"),IntLit(3)),UnOp("-",Id("y"))),
-             UnOp("!",Id("y"))))
+
+int a
+
+
+def foo(b: auto):
+    a = b
+
+
+bool b
+
+main{
+    foo(2.5)
+}
+
+# def bar(inherit y):
+#     print bar

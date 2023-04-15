@@ -4,6 +4,7 @@
         "./src/main/mt22/parser",
         "./src/main/mt22/astgen",
         "./src/main/mt22/checker",
-        "./src/test"
+        "./src/test",
+        "./src/main/mt22/codegen"
     ]
 }
