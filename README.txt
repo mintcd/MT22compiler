@@ -8,4 +8,8 @@ Then type: python run.py test CheckerSuite
 Then type: python run.py test CodeGenSuite
 
 
+Trong visitId:
+    Truyền name trả về type
+
+
 

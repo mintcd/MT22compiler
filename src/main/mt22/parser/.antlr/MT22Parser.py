@@ -1,4 +1,4 @@
-# Generated from d:\University\PPL\Assignment3\src\main\mt22\parser\MT22.g4 by ANTLR 4.9.2
+# Generated from c:\Projects\MT22compiler\src\main\mt22-Jasmin\parser\MT22.g4 by ANTLR 4.9.2
 # encoding: utf-8
 from antlr4 import *
 from io import StringIO

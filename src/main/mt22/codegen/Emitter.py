@@ -46,6 +46,7 @@ class Emitter:
         elif typeIn is VoidType:
             return "void"
 
+    # Load an integer const to a register
     def emitPUSHICONST(self, in_, frame):
         # in: Int or Sring
         # frame: Frame
@@ -102,6 +103,7 @@ class Emitter:
 
     ##############################################################
 
+    # Load an address into a register
     def emitALOAD(self, in_, frame):
         # in_: Type
         # frame: Frame
@@ -153,6 +155,7 @@ class Emitter:
             in_, varName, self.getJVMType(inType), fromLabel, toLabel
         )
 
+    # index: location referred to $sp
     def emitREADVAR(self, name, inType, index, frame):
         # name: String
         # inType: Type
@@ -233,6 +236,7 @@ class Emitter:
     *   @param isFinal true in case of constant; false otherwise
     """
 
+    # Final is constant in Java 
     def emitATTRIBUTE(self, lexeme, inType, isFinal, value=None):
         # lexeme: String
         # inType: Type
