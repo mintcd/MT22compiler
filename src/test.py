@@ -1,6 +1,6 @@
-from main.mt22.checker.StaticChecker import SymbolTable, StaticChecker
-from main.mt22.utils.AST import *
+class A:
+    def __init__(self,a = 0):
+        self.a = a
 
-st, typ = StaticChecker.visitArrayLit(ArrayLit({{4,4,4},{4,4,4}}), SymbolTable())
-
-print(typ)
+x = A()
+print(hasattr(x, 'b'))
