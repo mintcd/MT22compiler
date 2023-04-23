@@ -1,16 +1,16 @@
 from typing import List
-from Visitor import Visitor
 from StaticError import *
+from Visitor import Visitor
 from AST import *
 from abc import ABC
 
 
-class StmtType(Type): pass
-class DeclType(Type): pass
+class StmtType: pass
+class DeclType: pass
 
-class VarDeclType(Type): pass
-class FuncDeclType(Type): pass
-
+class VarDeclType(DeclType): pass
+class FuncDeclType(DeclType): pass
+class IllegalType(Type): pass
 
 class LoopStmtType(StmtType): pass
 class MustInLoopStmtType(StmtType): pass
@@ -24,11 +24,16 @@ class Symbol:
     def __init__(self, name, typ: Type):
         self.name = name
         self.typ = typ
+    def __str__(self):
+        return "Symbol({}, {})".format(self.name, self.typ)
 
 
 class VarSym(Symbol):
     def __init__(self, name : str, typ : Type):
         super().__init__(name, typ)
+    
+    def __str__(self):
+        return "VarSym({}, {})".format(self.name, self.typ)
 
 
 class ParaSym(Symbol):
@@ -36,7 +41,11 @@ class ParaSym(Symbol):
         super().__init__(name, typ)
         self.out = out
         self.inherit = inherit
-
+    def __str__(self):
+        return "ParaSym({}, {}{}{})".format(self.name, 
+                                            self.typ, 
+                                            ", inherit" if self.inherit else "",
+                                            ", out" if self.out else "")
 
 class FuncSym(Symbol):
     def __init__(self, name : str, typ : Type, params: List[Symbol] = [], inherit: str or None = None, parentparams: List[ParaSym] = [],):
@@ -45,58 +54,115 @@ class FuncSym(Symbol):
         self.inherit = inherit
         self.parentparams = parentparams
 
+    def __str__(self):
+        return f"FuncSym({self.name}, {self.typ}, [{', '.join(str(param) for param in self.params)}], {self.inherit}{' ' if self.inherit is not None else ''}, [{', '.join(str(parentparam) for parentparam in self.parentparams)}])"
+
 
 """ Every node points to a symbol table where there is a field received from parent and its own field
 Function prototypes must be saved separately in precheck
 Every node returns a pair of st and type which can be used by parent
 """
 
+class Properties:
+    def __init__(self, inFunc = None, inLoop = 0, isSuper = False, returnType = None):
+
+        # This is in a Funcdecl
+        self.inFunc = inFunc
+
+        # This is in some loops
+        self.inLoop = inLoop
+
+        # This call statement is called through super()
+        self.isSuper = isSuper
+
 class SymbolTable:
-    def __init__(self, env : List[List[Symbol]] = [[]], funcprototype : List[FuncSym] = [], fromParent = [], fromChildren = []):
-        """To receive information from parent"""
-        self.fromParent = fromParent
-
-        """To receive information from child"""
-        self.fromChildren = fromChildren
-
+    def __init__(self, 
+                 envs = [[]], 
+                 funcprototype : List[FuncSym] = [], 
+                 properties : Properties = Properties()):
         """Local environments"""
-        self.env = env
+        self.envs = [[]] if envs == [[]] else envs
 
         """Global function prototypes"""
-        self.funcprototype = funcprototype
+        self.funcprototype = [] if funcprototype == [] else funcprototype
+        self.library = [FuncSym("readInteger", IntegerType()),
+                        FuncSym("printInteger", VoidType(), [ParaSym("veryStrange", IntegerType())]),
+                        FuncSym("readFloat", FloatType()),
+                        FuncSym("writeFloat", VoidType(), [ParaSym("veryStrange", FloatType())]),
+                        FuncSym("readBoolean", BooleanType()),
+                        FuncSym("printBoolean", VoidType(), [ParaSym("veryStrange", BooleanType())]),
+                        FuncSym("readString", StringType()),
+                        FuncSym("printString", VoidType(), [ParaSym("veryStrange", StringType())])]
+        
+        # Properties
+        self.properties = properties
 
 class Utils:
-    def findSym(name : str, st : SymbolTable):
-        for scope in st.env:
+
+    def addSym(sym : Symbol, st : SymbolTable):
+        st.envs[0] = [sym] + st.envs[0]
+        return SymbolTable(st.envs, st.funcprototype, st.properties)
+
+    def findVar(name : str, st : SymbolTable):
+        for scope in st.envs:
             for sym in scope:
                 if sym.name == name: return sym
-        return None
     
-    def infer(name : str, typ : Type, st : SymbolTable):
-        for scope in st.env:
-            for sym in scope:
-                if sym.name == name and type(sym) is VarSym or type(sym) is ParaSym:
-                    sym.typ = typ
-                    return sym
-        return None
-
-    def passToParent(info, st : SymbolTable):
-        """Remove a scope and pass it to parent"""
-        return SymbolTable(st.env, st.funcprototype, [], st.fromChildren + [info])
+    def findFunc(name : str, st : SymbolTable):
+        for sym in st.library + st.funcprototype:
+            if sym.name == name: return sym
     
-    def passToChild(info, st : SymbolTable):
-        """Create a new scope and pass it to child""" 
-        return SymbolTable(st.env, st.funcprototype, st.fromParent + [info], [])
-    
-    def createScope(st : SymbolTable):
-        return SymbolTable([[]] + st.env, st.funcprototype, st.fromParent, st.fromChildren)
-    
-    def removeScope(st : SymbolTable):
-        return SymbolTable(st.env[1:], st.funcprototype, st.fromParent, st.fromChildren)
+    def find(name : str, st : SymbolTable):
+        sym = None
+        sym = Utils.findVar(name, st)
+        if not sym: sym = Utils.findFunc(name, st)
+        return sym
 
         
+    def isCoercionable(typ1 : Type, typ2 : Type):
+        if type(typ1) is not type(typ2):
+            if type(typ1) is FloatType and type(typ2) is IntegerType: return True
+            return False
+        else:
+            if type(typ1) is ArrayType and type(typ2) is ArrayType: 
+                if typ1.dimensions != typ2.dimensions: return False
+                if not Utils.isCoercionable(typ1.typ, typ2.typ): return False
+            return True
+    
+    """Come into a function body"""
+    def comeInFunc(st : SymbolTable, info : FuncSym):
+        return SymbolTable([[]]+st.envs, st.funcprototype, Properties(info, st.properties.inLoop, st.properties.isSuper))
 
+    """Come into a loop body"""
+    def comeInLoop(st : SymbolTable):
+        return SymbolTable([[]]+st.envs, st.funcprototype, Properties(st.properties.inFunc, st.properties.inLoop + 1, st.properties.isSuper))
+    
+    def comeInBlock(st : SymbolTable):
+        return SymbolTable([[]]+st.envs, st.funcprototype, st.properties)
+    
+    def comeOutLoop(st : SymbolTable):
+        return SymbolTable([[]]+st.envs, st.funcprototype, Properties(st.properties.inFunc, st.properties.inLoop - 1, st.properties.isSuper))
+
+
+    """Turn decl to symbol"""
+    def transform(decl : Decl):
+        if type(decl) is VarDecl: return VarSym(decl.name, decl.typ)
+        if type(decl) is ParamDecl: return ParaSym(decl.name, decl.typ, decl.out, decl.inherit)
+        if type(decl) is FuncDecl: return FuncSym(decl.name, decl.return_type, list(map(lambda x: Utils.transform(x), decl.params)), decl.inherit, [])
+    
+    def findLocal(name : str, st : SymbolTable):
+        results = filter(lambda sym: sym.name == name, st.envs[0])
+        return next(results, None)
+    
+    def infer(name : str, typ : Type, st : SymbolTable):
+        Utils.find(name, st).typ = typ
+        return typ
+     
 class PreCheck(Visitor):
+    
+    def __init__(self, ast):
+        self.ast = ast
+    
     """Visit funcdecls"""
     def visitProgram(self, ast: Program, st: SymbolTable):
         for decl in ast.decls:
@@ -106,8 +172,8 @@ class PreCheck(Visitor):
     
     """Append prototypes"""
     def visitFuncDecl(self, ast : FuncDecl, st : SymbolTable):
-        return SymbolTable(st.env, st.funcprototype + [FuncSym(ast.name, ast.return_type, ast.params, ast.inherit, [])], st.fromParent, st.fromChildren)
-
+        return SymbolTable(st.envs, st.funcprototype + [Utils.transform(ast)], st.properties)
+    
 
 class StaticChecker(Visitor):
 
@@ -130,16 +196,20 @@ class StaticChecker(Visitor):
         typ = AutoType()
         for exp in ast.explist:
             st, exptyp = self.visit(exp, st)
-            if type(typ) is AutoType:
-                typ = exptyp
-            else:
-                # If they are of different types or array type with different dicts
-                if type(typ) is not type(exptyp): raise IllegalArrayLiteral(ast)
-                if type(typ) is ArrayType and (typ.dimensions != exptyp.dimensions or typ.typ != exptyp.typ): 
-                    raise IllegalArrayLiteral(ast)
-
+            # Element is invalid
+            if type(exptyp) is IllegalType: 
+                return st, IllegalType()
+            elif type(typ) is AutoType: typ = exptyp
+            elif type(exptyp) is AutoType: exptyp = Utils.infer(exp.name, typ, st)
+            elif type(exp) is not type(exptyp) or type(exp) != type(exptyp): return st, IllegalType()
+          
         # All elements are of AutoType       
-        if type(typ) is AutoType: raise IllegalArrayLiteral(ast)
+        if type(typ) is AutoType: return st, IllegalType()    
+
+        # Infer elements
+        for exp in ast.explist:
+            st, exptyp = self.visit(exp, st)
+            if type(exptyp) is AutoType: exptyp.typ = typ     
 
         # Elements are arrays
         if type(typ) is ArrayType:
@@ -147,353 +217,346 @@ class StaticChecker(Visitor):
         return st, ArrayType([len(ast.explist)], typ)
 
     def visitId(self, ast : Id, st: SymbolTable):
-        sym = Utils.findSym(ast.name, st)
-        if not sym: raise Undeclared(Identifier(), ast.name)
+        sym = Utils.findVar(ast.name, st)
+        if not sym: 
+            raise Undeclared(Identifier(), ast.name)
         if type(sym) not in [VarSym, ParaSym]: raise TypeMismatchInExpression(ast) 
         return st, sym.typ
 
     def visitArrayCell(self, ast : ArrayCell, st : SymbolTable):
-        sym = Utils.findSym(st, ast.name)
-        if not sym: raise Undeclared(Identifier(), ast.name)
-        if type(sym) is not ArrayType: raise TypeMismatchInExpression(ast)
+        sym = Utils.findVar(ast.name, st)
+        if not sym: 
+            raise Undeclared(Identifier(), ast.name)
+        if type(sym) not in [VarSym, ParaSym] or type(sym.typ) is not ArrayType: raise TypeMismatchInExpression(ast)
+
+        if len(ast.cell) > len(sym.typ.dimensions): raise TypeMismatchInExpression(ast)
 
         for idx in ast.cell:
             st, idxtype = self.visit(idx, st)
-            if type(idxtype) is not IntegerLit: 
+            if type(idxtype) is AutoType:
+                if type(idx) is FuncCall: 
+                    Utils.findFunc(idx.name, st).typ = IntegerType()
+                else: Utils.findVar(idx.name, st).typ = IntegerType()
+            elif type(idxtype) is not IntegerType:
                 raise TypeMismatchInExpression(ast)
-
-        if len(ast.cell) == len(sym.typ.dimensions):
-            return st, sym.typ
-        return st, ArrayType(sym.typ.dimensions[len(ast.cell):], sym.typ.typ)
+            
+        subdim = sym.typ.dimensions[len(ast.cell):]
+        if len(subdim) == 0: return st, sym.typ.typ
+        return st, ArrayType(subdim, sym.typ.typ)
 
     def visitBinExpr(self, ast : BinExpr, st : SymbolTable):
         st, rtype = self.visit(ast.right, st)
         st, ltype = self.visit(ast.left, st)
-
-        # Both are AutoType, raise Exeption
-        if type(rtype) is AutoType and type(ltype) is AutoType: 
-            raise TypeMismatchInExpression(ast)
         
         # One is AutoType, infer the other
         if type(rtype) is AutoType:
             Utils.infer(ast.right.name, ltype, st)
+            rtype = ltype
+            
         if type(ltype) is AutoType:
             Utils.infer(ast.left.name, rtype, st)
+            ltype = rtype
 
         if ast.op in ["+", "-", "*"]:
-            if type(rtype) not in [IntegerType, FloatType] or type(ltype) not in [IntegerType, FloatType]:
-                raise TypeMismatchInExpression(ast)
-            if FloatType in [type(rtype), type(ltype)]:
-                return st, FloatType()
+            if type(ltype) not in [IntegerType, FloatType] or type(rtype) not in [IntegerType, FloatType]: raise TypeMismatchInExpression(ast)
+            if FloatType in [type(ltype), type(rtype)]: return st, FloatType()
             return st, IntegerType()
         elif ast.op == "/":
-            if type(rtype) not in [IntegerType, FloatType] or type(ltype) not in [IntegerType, FloatType]:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) not in [IntegerType, FloatType] or type(ltype) not in [IntegerType, FloatType]: raise TypeMismatchInExpression(ast)
             return st, FloatType()
         elif ast.op == "%":
-            if type(rtype) is not IntegerType or type(ltype) is not IntegerType:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) is not IntegerType or type(ltype) is not IntegerType: raise TypeMismatchInExpression(ast)
             return st, IntegerType()
         elif ast.op in ["&&", "||"]:
-            if type(rtype) is not BooleanType or type(ltype) is not BooleanType:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) is not BooleanType or type(ltype) is not BooleanType: raise TypeMismatchInExpression(ast)
             return st, BooleanType()
         elif ast.op == "::":
-            if type(rtype) is not StringType or type(ltype) is not StringType:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) is not StringType or type(ltype) is not StringType: raise TypeMismatchInExpression(ast)
             return st, StringType()
         elif ast.op in ["==", "!="]:
-            if type(rtype) is not type(ltype):
-                raise TypeMismatchInExpression(ast)
-            if ltype not in [IntegerType, BooleanType]:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) is not type(ltype): raise TypeMismatchInExpression(ast)
+            if ltype not in [IntegerType, BooleanType]: raise TypeMismatchInExpression(ast)
             return st, BooleanType()
         elif ast.op in ["<", ">", "<=", ">="]:
-            # The same type?
-            if type(rtype) not in [IntegerType, FloatType] or ltype not in [IntegerType, FloatType]:
-                raise TypeMismatchInExpression(ast)
+            if type(rtype) not in [IntegerType, FloatType] or type(ltype) not in [IntegerType, FloatType]: raise TypeMismatchInExpression(ast)
             return st, BooleanType()
 
     def visitUnExpr(self, ast, st):
-        op = ast.op
         st, typ = self.visit(ast.val, st)
-        if op == "-":
-            if type(typ) not in [IntegerType, FloatType]:
-                raise TypeMismatchInExpression(ast)
+        if ast.op == "-":
+            if type(typ) is AutoType: 
+                typ = Utils.infer(ast.val.name, IntegerType(), st)
+            elif type(typ) not in [IntegerType, FloatType]: raise TypeMismatchInExpression(ast)
             return st, typ
-        elif op == "!":
-            if type(typ) is not BooleanType:
-                raise TypeMismatchInExpression(ast)
-            return st, typ
+        elif ast.op == "!":
+            if type(typ) is AutoType: 
+                typ = Utils.infer(ast.val.name, BooleanType(), st)
+            elif type(typ) is not BooleanType: raise TypeMismatchInExpression(ast)
+            return st, BooleanType()
 
     def visitFuncCall(self, ast: FuncCall, st: SymbolTable):
         # Check if there is callee
-        funcsym = Utils.findSym(ast.name, st)
+        funcsym = Utils.findFunc(ast.name, st)
         if not funcsym: raise Undeclared(Function(), ast.name)
-        if type(funcsym) is not FuncSym: raise TypeMismatchInExpression(ast)
+        if type(funcsym.typ) is VoidType: 
+            raise TypeMismatchInExpression(ast)
 
-        if funcsym.typ == VoidType():  raise TypeMismatchInExpression(ast)
-        
         """ Check its args """
-
         # Different number of arguments
-        if len(funcsym.params) != len(ast.args): raise TypeMismatchInExpression(ast)
+        if len(funcsym.params) < len(ast.args): 
+            raise TypeMismatchInExpression(ast.args[len(funcsym.params)])
+        if len(funcsym.params) > len(ast.args): 
+            raise TypeMismatchInExpression(ast)
 
-        # Out but not LHS
         for i in range(len(funcsym.params)):
-            if funcsym.params[i].out: 
-                if type(ast.args[i]) is not LHS:
-                    raise TypeMismatchInExpression(ast)     
-
+            if funcsym.params[i].out and type(ast.args[i]) not in [Id, ArrayCell]:
+                raise TypeMismatchInExpression(ast.args[i])
+            
         # Infer for param or check param - arg agreements
         for i in range(len(funcsym.params)):
-            argType = self.visit(ast.args[i], st)
-            if funcsym.params[i].typ == AutoType():
+            st, argType = self.visit(ast.args[i], st)
+            if type(funcsym.params[i].typ) is AutoType: 
                 funcsym.params[i].typ = argType
-            elif funcsym.params[i].typ == FloatType():
-                if argType == IntegerType(): continue
-            elif funcsym.params[i].typ != argType:
-                raise TypeMismatchInExpression(ast)    
+            elif type(argType) is AutoType:
+                Utils.infer(ast.args[i].name, funcsym.params[i].typ, st)
+            elif not Utils.isCoercionable(funcsym.params[i].typ, argType): 
+                raise TypeMismatchInExpression(ast.args[i])
         return st, funcsym.typ
 
     def visitAssignStmt(self, ast : AssignStmt, st : SymbolTable):
         st, rtype = self.visit(ast.rhs, st)
         st, ltype = self.visit(ast.lhs, st)
 
+        """Cannot be assigned"""
         if type(ltype) in [VoidType, ArrayType]: raise TypeMismatchInStatement(ast)
-
-        if type(ltype) is AutoType:
-            if type(rtype) is AutoType: raise TypeMismatchInStatement(ast)
-            Utils.infer(ast.lhs.name, rtype, st)
-        else:
-            """Different types and not Float - Int"""
-            if type(rtype) is not type(ltype) and not (type(rtype) is IntegerType and type(ltype) is FloatType):
-                raise TypeMismatchInStatement(ast)
-            
+        elif type(ltype) is AutoType: Utils.infer(ast.lhs.name, rtype, st)
+        elif type(rtype) is AutoType: Utils.infer(ast.rhs.name, ltype, st)
+        elif not Utils.isCoercionable(ltype, rtype): 
+            raise TypeMismatchInStatement(ast)            
         return st, AssignStmtType()
-
-    def visitBlockStmt(self, ast : BlockStmt, st : SymbolTable): 
-        """Create a new environment"""
-        newst = Utils.createScope(st)
-        """ Information all got from parent """
-        for ele in ast.body:
-            # Ignore super or preventDefault
-            if type(ele) is CallStmt and ele.name in ['super', 'preventDefault']: continue
-            newst, _ = self.visit(ele, newst)
-        """Return the original st with some more information"""
-        return st, BlockStmtType()
 
     def visitIfStmt(self, ast : IfStmt, st : SymbolTable):
         """Check cond"""
-        _, condtype = self.visit(ast.cond, st)
+        st, condtype = self.visit(ast.cond, st)
+
+        if type(condtype) is AutoType: Utils.infer(ast.cond.name, BooleanType, st)
         if type(condtype) is not BooleanType: raise TypeMismatchInStatement(ast)
-        newst, _ = self.visit(ast.tstmt, st)
-        if ast.fstmt:
-            newst, _ = self.visit(ast.fstmt, st)
+        
+        newst = Utils.comeInBlock(st)
 
-        if len(st.fromChildren) == 2: 
-            if type(st.fromChildren[0]) is not type(st.fromChildren[1]):
-                raise TypeMismatchInStatement(ast)
-        if len(st.fromChildren) == 1:
-            return Utils.passToParent(st[0], st), IfStmtType()
+        newst, _ = self.visit(ast.tstmt, newst)
 
+        if ast.fstmt: newst, _ = self.visit(ast.fstmt, newst)
 
         return st, IfStmtType()
 
-    # init: AssignStmt, cond: Expr, upd: Expr, stmt: Stmt
     def visitForStmt(self, ast : ForStmt, st : SymbolTable):
         """ Visit assign statement to infer if there is any"""
-        st, _ = self.visit(ast.init, ast)
-        st, lhs = self.visit(ast.init.lhs, ast)
-        st, rhs = self.visit(ast.init.rhs, ast)
+        st, _ = self.visit(ast.init, st)
+        st, lhs = self.visit(ast.init.lhs, st)
+        st, rhs = self.visit(ast.init.rhs, st)
 
-        """ One of them is not of IntegerType"""
         if type(rhs) is not IntegerType or type(lhs) is not IntegerType: raise TypeMismatchInStatement(ast)
         """ Make sure cond is BooleanType"""
         st, condType = self.visit(ast.cond, st)
-        if type(condType) is not BooleanType:
-            raise TypeMismatchInStatement(ast)
+        if type(condType) is AutoType: Utils.infer(ast.cond.name, BooleanType, st)
+        if type(condType) is not BooleanType: raise TypeMismatchInStatement(ast)
         
         """Make sure upd is IntegerType"""
         st, updType = self.visit(ast.upd, st)
         if type(updType) is not IntegerType: raise TypeMismatchInStatement(ast)
 
         """Pass infor before visiting child stmt"""
-        st, stmt = self.visit(ast.stmt, Utils.passToChild(LoopStmtType(), st))
-        return st, LoopStmtType()
+        st, _ = self.visit(ast.stmt, Utils.comeInLoop(st))
+        return Utils.comeOutLoop(st), LoopStmtType()
 
     def visitWhileStmt(self, ast : WhileStmt, st : SymbolTable):
         st, condType = self.visit(ast.cond, st)
-        if type(condType) is not BooleanType:
-            raise TypeMismatchInStatement(ast)
+        if type(condType) is AutoType: Utils.infer(ast.cond.name, BooleanType, st)
+        if type(condType) is not BooleanType: raise TypeMismatchInStatement(ast)
         
-        st, stmt = self.visit(ast.stmt, Utils.passToChild(LoopStmtType(), st))
-        return st, LoopStmtType()
+        st, _ = self.visit(ast.stmt, Utils.comeInLoop(st))
+        return Utils.comeOutLoop(st), LoopStmtType()
 
-    # cond: Expr, stmt: BlockStmt
     def visitDoWhileStmt(self, ast, st):
         st, condType = self.visit(ast.cond, st)
-        if type(condType) is not BooleanType: raise TypeMismatchInStatement(ast)
 
-        st, stmt = self.visit(ast.stmt, Utils.passToChild(LoopStmtType(), st))
-        return st, LoopStmtType()
+        if type(condType) is AutoType: Utils.infer(ast.cond.name, BooleanType, st)
+        if type(condType) is not BooleanType: 
+            raise TypeMismatchInStatement(ast)
+        
+        st, _ = self.visit(ast.stmt, Utils.comeInLoop(st))
+        return Utils.comeOutLoop(st), LoopStmtType()
     
     def visitBreakStmt(self, ast : BreakStmt, st : SymbolTable):
-        inLoop = False
-        for info in st.fromParent:
-            if type(info) is LoopStmtType: 
-                inLoop = True
-                break
-        if not inLoop: raise MustInLoop(ast)
+        if st.properties.inLoop == 0:
+            raise MustInLoop(ast)
         return st, MustInLoopStmtType()
 
     def visitContinueStmt(self, ast : ContinueStmt, st : SymbolTable):
-        inLoop = False
-        for info in st.fromParent:
-            if type(info) is LoopStmtType: 
-                inLoop = True
-                break
-        if not inLoop: raise MustInLoop(ast)
+        if st.properties.inLoop == 0:
+            raise MustInLoop(ast)
         return st, MustInLoopStmtType()
 
     def visitReturnStmt(self, ast : ReturnStmt, st : SymbolTable):
+        if not st.properties.inFunc: InvalidStatementInFunction(ast)
+
         if ast.expr is not None:
             st, exprtyp =  self.visit(ast.expr, st)
             """ Return type of the return statement expression"""
-            return Utils.passToParent(exprtyp, st), ReturnStmt()    
-        
-        return Utils.passToParent(VoidType(), st), ReturnStmt()  
+            # Compare and update return type
+            if type(st.properties.inFunc.typ) is AutoType: 
+                st.properties.inFunc.typ = exprtyp
+            elif not Utils.isCoercionable(st.properties.inFunc.typ, exprtyp):
+                raise TypeMismatchInStatement(ast) 
+        else: 
+            if type(st.properties.inFunc.typ) is AutoType: st.properties.inFunc.typ = VoidType()
+            elif type(st.properties.inFunc.typ) is not VoidType: raise TypeMismatchInStatement(ast)
+
+        return st, ReturnStmt()         
 
     def visitCallStmt(self, ast : CallStmt, st : SymbolTable):
-        # Check if there is callee
-        funcsym = Utils.findSym(ast.name, st)
-        if not funcsym: raise Undeclared(Function(), ast.name)
-        if type(funcsym) is not FuncSym: raise TypeMismatchInExpression(ast)
         
+        # Check if there is callee
+        funcsym = Utils.findFunc(ast.name, st)
+        if not funcsym: raise Undeclared(Function(), ast.name)
+        if type(funcsym) is not FuncSym: 
+            raise TypeMismatchInStatement(ast)
+        if st.properties.isSuper: ast.name = 'super'
         """ Check its args """
         # Different number of arguments
-        if len(funcsym.params) != len(ast.args): raise TypeMismatchInExpression(ast)
+        if ast.name != "super" and len(funcsym.params) != len(ast.args):
+            raise TypeMismatchInStatement(ast)
+        
+        if len(funcsym.params) < len(ast.args): 
+            raise TypeMismatchInExpression(ast.args[len(funcsym.params)])
+        if len(funcsym.params) > len(ast.args): 
+            raise TypeMismatchInExpression(None)
 
         # Out but not LHS
         for i in range(len(funcsym.params)):
-            if funcsym.params[i].out: 
-                if type(ast.args[i]) is not LHS:
-                    raise TypeMismatchInExpression(ast)     
+            if funcsym.params[i].out and type(ast.args[i]) not in [Id, ArrayCell]:
+                if ast.name != "super":
+                    raise TypeMismatchInStatement(ast)
+                raise TypeMismatchInExpression(ast.args[i])
 
         # Infer for param or check param - arg agreements
         for i in range(len(funcsym.params)):
-            argType = self.visit(ast.args[i], st)
-            if funcsym.params[i].typ == AutoType():
+            _, argType = self.visit(ast.args[i], st)
+            if type(funcsym.params[i].typ) is AutoType: 
                 funcsym.params[i].typ = argType
-            elif funcsym.params[i].typ == FloatType():
-                if argType == IntegerType(): continue
-            elif funcsym.params[i].typ != argType:
-                raise TypeMismatchInExpression(ast)    
+            elif type(argType) is AutoType:
+                Utils.infer(ast.args[i].name, funcsym.params[i].typ, st)
+            elif not Utils.isCoercionable(funcsym.params[i].typ, argType): 
+                if ast.name != "super": raise TypeMismatchInStatement(ast)
+                raise TypeMismatchInExpression(ast.args[i])
         return st, CallStmtType()
+    
+    def visitBlockStmt(self, ast : BlockStmt, st : SymbolTable):
+        for ele in ast.body:
+            # Ignore super or preventDefault
+            if type(ele) is CallStmt and ele.name in ['super', 'preventDefault']: continue
+            st, _ = self.visit(ele, st)
+            if type(ele) is ReturnStmt: break
+            
+        return st, BlockStmtType()
 
     def visitVarDecl(self, ast: VarDecl, st: SymbolTable):
         """Check if there is the same name in scope 0"""
-        for sym in st.env[0]:
-            if sym.name == ast.name: raise Redeclared(Variable(), ast.name)
-
+        if len(list(filter(lambda sym: sym.name == ast.name, st.envs[0]))) > 0: raise Redeclared(Variable(), ast.name)                
+        
         """Check semantics"""
         # There is no init
         if not ast.init:
-            if ast.typ == AutoType():
-                raise Invalid(Variable(), ast.name)
-            st.env[0].append(VarSym(ast.name, ast.typ))
-            return st, DeclType()
+            if type(ast.typ) is AutoType: raise Invalid(Variable(), ast.name)
         # There is init
         else:
             st, inityp = self.visit(ast.init, st)
+            st = Utils.addSym(VarSym(ast.name, ast.typ), st)
+
+            if type(inityp) is IllegalType: raise IllegalArrayLiteral(ast.init)
+            if type(ast.typ) is AutoType and type(inityp) is AutoType: 
+                raise TypeMismatchInVarDecl(ast) 
+
             if type(ast.typ) is AutoType:
-                st.env[0].append(VarSym(ast.name, inityp))
-                return st, DeclType()
-            else:
-                st, inittyp = self.visit(ast.init,st)
-                if type(ast.typ) is not type(inittyp):
-                    raise TypeMismatchInVarDecl(ast)
-                if type(ast.typ) is ArrayType():
-                    if ast.typ != inityp:
-                        if ast.typ.dimensions != inityp.dimensions:
-                            raise TypeMismatchInVarDecl(ast)
-                        if ast.typ.typ == AutoType():
-                            st.env[0].append(VarSym(ast.name, inityp.typ))
-                            return st
-                        raise TypeMismatchInVarDecl(ast)
-                st.env[0].append(VarSym(ast.name, ast.typ))
-                return st, DeclType()
+                ast.typ = Utils.infer(ast.name, inityp, st)
+                """This is a function or parameter"""
+            elif type(inityp) is AutoType:
+                Utils.infer(ast.init.name, ast.typ, st)
+            elif not Utils.isCoercionable(ast.typ, inityp): 
+                raise TypeMismatchInVarDecl(ast)
+        return Utils.addSym(VarSym(ast.name, ast.typ), st), DeclType()
 
     def visitParamDecl(self, ast: ParamDecl, st: SymbolTable): pass
-
-    # name: str, return_type: Type, params: List[ParamDecl], inherit: str or None, body: BlockStmt
+    
     def visitFuncDecl(self, ast: FuncDecl, st: SymbolTable):
         # If there is already the same name, raise
-        for sym in st.env[0]:
+        for sym in st.envs[0]:
             if sym.name == ast.name:
                 raise Redeclared(Function(), ast.name)
-        """ If this function inherits """
-        funcsym = FuncSym(ast.name, ast.return_type, 
-                          list
-                          (map
-                           (lambda paramdecl: ParaSym(paramdecl.name, paramdecl.typ, paramdecl.out, paramdecl.inherit), ast.params,)
-                        ),
-                    )
         
-
-        st.env[0].append(funcsym)
+        # Find its prototype in global scope
+        for funcsym in st.funcprototype:
+            if funcsym.name == ast.name:
+                st = Utils.addSym(funcsym, st)
+                break
+        
+        # Access this function
+        funcsym = st.envs[0][0]
+        
         """Create a new scope"""
-        newst = Utils.createScope(st)
+        newst = Utils.comeInFunc(st, funcsym)
+
+        """ If this function inherits """
         if ast.inherit:
             # Find its parent, if there is not raise Undeclared
-            parentsym = None
-            for funcsym in st.funcprototype:
-                if ast.inherit == funcsym.name: 
-                    parentsym = funcsym
-                    break
+            parentsym = Utils.findFunc(ast.inherit, st)
             if not parentsym: raise Undeclared(Function(), ast.inherit)
-
             """ Append its parent's inherit params into scope 0 """
             for parentparam in parentsym.params:
                 if parentparam.inherit:
-                    newst.env[0].append(parentparam)
-
+                    newst = Utils.addSym(parentparam, newst)
             """ Traverse its params """
             # If same name as parent's raise Invalid
             for param in funcsym.params:
-                if Utils.findSym(param.name, st): raise Invalid(Parameter(), param.name)
+                if Utils.findLocal(param.name, newst): 
+                    raise Invalid(Parameter(), param.name)
+                
             # If same nams as its own raise Redeclared
             for param in funcsym.params:
-                if Utils.findSym(param.name, st): raise Redeclared(Parameter(), param.name)
-                newst.env[0].append(param)
+                if Utils.findVar(param.name, newst): 
+                    raise Redeclared(Parameter(), param.name)
+                newst = Utils.addSym(param, newst)
         
             """Traverse first statement"""
             # Nothing or not in ['prevendefaut', 'super'], does not have name 
             if len(ast.body.body) == 0 or not hasattr(ast.body.body[0], 'name') or ast.body.body[0].name not in ['preventDefault', 'super']: 
-                if len(parentsym.params) != 0: raise TypeMismatchInExpression()
+                if len(parentsym.params) != 0: raise TypeMismatchInExpression(None)
             elif ast.body.body[0].name == 'super':
+                newst.properties.isSuper = True
                 newst, _ = self.visit(CallStmt(parentsym.name, ast.body.body[0].args), newst)
-
-            """ Visit body as a normal Blockstmt """
-            newst, _ = self.visit(ast.body, newst)
         else:
             """Traverse its own params"""
             for param in funcsym.params:
-                if Utils.findSym(param.name, st): raise Redeclared(Parameter(), param.name)
-                newst.env[0].append(param)
+                if Utils.findLocal(param.name, newst): raise Redeclared(Parameter(), param.name)
+                newst = Utils.addSym(param, newst)
             
             if len(ast.body.body) > 0 and type(ast.body.body[0]) is CallStmt and ast.body.body[0].name in ['preventDefault', 'super']:
-                raise InvalidStatementInFunction(ast.name)
-                
+                raise InvalidStatementInFunction(ast.name)            
 
-            """Traverse its body"""
-            newst, _ = self.visit(ast.body, newst)
-
+        """Traverse its body"""
+        newst, _ = self.visit(ast.body, newst)
         return st, DeclType()
 
-    # decls: List[Decl]
     def visitProgram(self, ast : Program, st : SymbolTable):
         st = SymbolTable()
-        st = PreCheck().visit(ast, st)
+        st = PreCheck(ast).visit(ast, st)
+
         for decl in ast.decls:
             st, _ = self.visit(decl, st)
+        
+        hasMain = False
+        for funcsym in st.funcprototype:
+            if funcsym.name == 'main' and funcsym.params == [] and type(funcsym.typ) is VoidType:
+                hasMain = True
+        if not hasMain: raise NoEntryPoint()
